@@ -84,9 +84,9 @@ func TestSet(t *testing.T) {
 
 func TestFind(t *testing.T) {
 	for _, testCase := range []struct {
-		name    string
-		objects map[string]labels.Set
-		reqs []labels.Requirement
+		name        string
+		objects     map[string]labels.Set
+		reqs        []labels.Requirement
 		bestReqKeys []string
 	}{
 		{
@@ -113,7 +113,7 @@ func TestFind(t *testing.T) {
 			}
 
 			selector := labels.NewSelector().Add(testCase.reqs...)
-			collector := SliceCollector{}
+			collector := SliceCollector[string]{Transform: func(s string) string { return s }}
 
 			bestKey := indexer.findUnsafe(selector, collector.Collect)
 
@@ -127,8 +127,8 @@ func TestFind(t *testing.T) {
 			}
 
 			sort.Strings(expectedResults)
-			sort.Strings(collector)
-			assert.Equal(expectedResults, []string(collector))
+			sort.Strings(collector.Slice)
+			assert.Equal(expectedResults, []string(collector.Slice))
 		})
 	}
 }

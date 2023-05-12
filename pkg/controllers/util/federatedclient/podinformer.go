@@ -28,27 +28,33 @@ import (
 	"k8s.io/client-go/informers"
 	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/kubewharf/kubeadmiral/pkg/controllers/util/labelindexer"
 )
 
 func addPodInformer(ctx context.Context,
 	informer informers.SharedInformerFactory,
 	client kubeclient.Interface,
 	podListerSemaphore *semaphore.Weighted,
-	enablePodPruning bool) {
+	enablePodPruning bool,
+) {
 	informer.InformerFor(&corev1.Pod{}, func(k kubeclient.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-		return cache.NewSharedIndexInformer(
+		informer := cache.NewSharedIndexInformer(
 			podListerWatcher(ctx, client, podListerSemaphore, enablePodPruning),
 			&corev1.Pod{},
 			resyncPeriod,
 			cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
 		)
+
+		return labelindexer.NewIndexInformerWrapper(informer)
 	})
 }
 
 func podListerWatcher(ctx context.Context,
 	client kubeclient.Interface,
 	semaphore *semaphore.Weighted,
-	enablePodPruning bool) cache.ListerWatcher {
+	enablePodPruning bool,
+) cache.ListerWatcher {
 	return &cache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 			if semaphore != nil {
@@ -124,6 +130,7 @@ func prunePod(pod *corev1.Pod) {
 			Generation:      pod.Generation,
 			ResourceVersion: pod.ResourceVersion,
 			UID:             pod.UID,
+			Labels:          pod.Labels,
 		},
 		Spec: corev1.PodSpec{
 			NodeName:       pod.Spec.NodeName,

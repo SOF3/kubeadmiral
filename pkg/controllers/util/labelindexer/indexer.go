@@ -139,15 +139,20 @@ func (indexer *Indexer) removeEntryUnsafe(objectKey, labelKey, labelValue string
 
 type ObjectCollector = func(objectKey string)
 
-type SliceCollector []string
+type SliceCollector[T any] struct {
+	Slice     []T
+	Transform func(string) T
+}
 
-func (collector *SliceCollector) Collect(objectKey string) {
-	*collector = append(*collector, objectKey)
+func (collector *SliceCollector[T]) Collect(objectKey string) {
+	collector.Slice = append(collector.Slice, collector.Transform(objectKey))
 }
 
 func (indexer *Indexer) Find(selector labels.Selector, collector ObjectCollector) {
 	indexer.mu.RLock()
 	defer indexer.mu.RUnlock()
+
+	indexer.findUnsafe(selector, collector)
 }
 
 func (indexer *Indexer) findUnsafe(selector labels.Selector, collector ObjectCollector) (usedKey string) {
