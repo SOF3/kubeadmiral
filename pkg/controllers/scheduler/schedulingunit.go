@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 
 	fedcorev1a1 "github.com/kubewharf/kubeadmiral/pkg/apis/core/v1alpha1"
@@ -37,6 +38,7 @@ import (
 	"github.com/kubewharf/kubeadmiral/pkg/controllers/scheduler/framework"
 	"github.com/kubewharf/kubeadmiral/pkg/controllers/util"
 	"github.com/kubewharf/kubeadmiral/pkg/controllers/util/federatedclient"
+	"github.com/kubewharf/kubeadmiral/pkg/controllers/util/labelindexer"
 	utilunstructured "github.com/kubewharf/kubeadmiral/pkg/controllers/util/unstructured"
 )
 
@@ -219,9 +221,11 @@ func getClusterPodUsage(
 	federatedClient federatedclient.FederatedClientFactory,
 	cluster *fedcorev1a1.FederatedCluster,
 	fedObject *unstructured.Unstructured,
-	selector *metav1.LabelSelector,
+	labelSelector *metav1.LabelSelector,
 ) (res framework.Resource, err error) {
-	client, exists, err := federatedClient.KubeClientsetForCluster(cluster.Name)
+	logger := klog.FromContext(ctx)
+
+	factory, exists, err := federatedClient.KubeSharedInformerFactoryForCluster(cluster.Name)
 	if err != nil {
 		return res, fmt.Errorf("get clientset: %w", err)
 	}
@@ -229,15 +233,43 @@ func getClusterPodUsage(
 		return res, fmt.Errorf("clientset does not exist yet") // wait for the clientset to get created
 	}
 
-	pods, err := client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
-		ResourceVersion: "0",
-		LabelSelector:   metav1.FormatLabelSelector(selector),
-	})
+	selector, err := metav1.LabelSelectorAsSelector(labelSelector)
 	if err != nil {
-		return res, fmt.Errorf("cannot list pods: %w", err)
+		logger.Error(err, "Assume pod usage as zero for workload with invalid selector")
+		selector = labels.Nothing()
 	}
 
-	usage := clusterresource.AggregatePodUsage(pods.Items, func(pod corev1.Pod) *corev1.Pod { return &pod })
+	podsInformer := factory.Core().V1().Pods()
+
+	var pods []*corev1.Pod
+
+	if labelIndexed, isLabelIndexed := podsInformer.Informer().(*labelindexer.IndexInformerWrapper); isLabelIndexed {
+		collector := labelindexer.SliceCollector[*corev1.Pod]{
+			Transform: func(key string) *corev1.Pod {
+				namespace, name, err := cache.SplitMetaNamespaceKey(key)
+				if err != nil {
+					panic("pod key cannot be invalid")
+				}
+
+				pod, err := podsInformer.Lister().Pods(namespace).Get(name)
+				if err != nil {
+					logger.Error(err, "inconsistent indexer state, pod not present in cache", "key", key)
+				}
+
+				return pod
+			},
+		}
+
+		labelIndexed.List(selector, collector.Collect)
+		pods = collector.Slice
+	} else {
+		pods, err = podsInformer.Lister().List(selector)
+		if err != nil {
+			return res, err
+		}
+	}
+
+	usage := clusterresource.AggregatePodUsage(pods, func(pod *corev1.Pod) *corev1.Pod { return pod })
 	return *framework.NewResource(usage), nil
 }
 

@@ -28,6 +28,8 @@ import (
 	"k8s.io/client-go/informers"
 	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/kubewharf/kubeadmiral/pkg/controllers/util/labelindexer"
 )
 
 func addPodInformer(ctx context.Context,
@@ -37,12 +39,14 @@ func addPodInformer(ctx context.Context,
 	enablePodPruning bool,
 ) {
 	informer.InformerFor(&corev1.Pod{}, func(k kubeclient.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-		return cache.NewSharedIndexInformer(
+		informer := cache.NewSharedIndexInformer(
 			podListerWatcher(ctx, client, podListerSemaphore, enablePodPruning),
 			&corev1.Pod{},
 			resyncPeriod,
 			cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
 		)
+
+		return labelindexer.NewIndexInformerWrapper(informer)
 	})
 }
 
@@ -126,6 +130,7 @@ func prunePod(pod *corev1.Pod) {
 			Generation:      pod.Generation,
 			ResourceVersion: pod.ResourceVersion,
 			UID:             pod.UID,
+			Labels:          pod.Labels,
 		},
 		Spec: corev1.PodSpec{
 			NodeName:       pod.Spec.NodeName,
